@@ -1,0 +1,1 @@
+add lib and include folder from community-sdk
