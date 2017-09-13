@@ -1,50 +1,54 @@
 #include "ofxIedk.h"
 
+using namespace ofxIedkToolKit;
+
 //--------------------------------------------------------------
-ofxIedk::ofxIedk()
+iedkToolkit::iedkToolkit()
 :state(0)
 ,userID(0)
-,channelSize(0)
 ,deviceSize(0)
-,alpha(0)
-,low_beta(0)
-,high_beta(0)
-,gamma(0)
-,theta(0)
 ,isReady(false)
 ,bConnected(false)
-,bUpdateEmotion(false)
 ,useEmotionEvent(false)
 ,useMotionEvent(false)
 ,useMentalEvent(false)
 ,useFacialEvent(false)
 ,debugEventType("")
 ,licenseInfo("")
+,insightChannelList{ IED_AF3, IED_AF4, IED_T7, IED_T8, IED_Pz }
+,epocplusChannelList{ IED_AF3, IED_F7, IED_F3, IED_FC5, IED_T7, IED_P7, IED_O1, IED_O2, IED_P8, IED_T8, IED_FC6, IED_F4, IED_F8, IED_AF4 }
+,deviceType(EMOTIV_INSIGHT)
+
 {
     eEvent = IEE_EmoEngineEventCreate();
     eState = IEE_EmoStateCreate();
-    channelSize = sizeof(channelList)/sizeof(channelList[0]);
     IEE_EmoInitDevice(); //use BTLE
     if (IEE_EngineConnect() != EDK_OK) {
         ofLog(OF_LOG_ERROR, "Emotiv Driver start up failed.");
     }
-    ofAddListener(ofEvents().update, this, &ofxIedk::update);
+    setDevice(deviceType);
+    ofAddListener(ofEvents().update, this, &iedkToolkit::update);
 }
 
 //--------------------------------------------------------------
-ofxIedk::~ofxIedk(){
+iedkToolkit::~iedkToolkit(){
     IEE_EngineDisconnect();
     IEE_EmoStateFree(eState);
     IEE_EmoEngineEventFree(eEvent);
 }
 
 //--------------------------------------------------------------
-void ofxIedk::setDevice(EMOTIV_DEVICE_TYPE type){
+void iedkToolkit::setDevice(EMOTIV_DEVICE_TYPE type){
     deviceType = type;
+    if(deviceType == EMOTIV_INSIGHT) { channels.resize(insightChannelList.size()); }
+    //AF3, AF4, T7, T8, Pz
+    else if(deviceType == EMOTIV_EPOCPLUS) { channels.resize(epocplusChannelList.size()); }
+    //AF3, F7, F3, FC5, T7, P7, O1, O2, P8, T8, FC6, F4, F8, AF4
+    IEEQuality.resize(channels.size());
 }
 
 //--------------------------------------------------------------
-void ofxIedk::addEvent(IEDK_EVENT_TYPE event){
+void iedkToolkit::addEvent(IEDK_EVENT_TYPE event){
     switch(event){
         case USE_EVENT_EMOTION:
             useEmotionEvent = true;
@@ -74,7 +78,7 @@ void ofxIedk::addEvent(IEDK_EVENT_TYPE event){
 }
 
 //--------------------------------------------------------------
-void ofxIedk::connect(int _id){
+void iedkToolkit::connect(int _id, bool use){
     if(deviceSize > 0 && !bConnected) {
         if(deviceType == EMOTIV_INSIGHT){
             string name = IEE_GetInsightDeviceName(_id);
@@ -87,16 +91,19 @@ void ofxIedk::connect(int _id){
         }
         bConnected = true;
     }
+    //for Multi Dongle Connection
+    //IEE_DataAcquisitionEnable(_id, use);
+    //IEE_DataUpdateHandle();
 }
 
 //--------------------------------------------------------------
-void ofxIedk::disconnect(){
+void iedkToolkit::disconnect(){
     IEE_DisconnectDevice();
     bConnected = false;
 }
 
 //--------------------------------------------------------------
-float ofxIedk::getBatteryStatus(){
+float iedkToolkit::getBatteryStatus(){
     int batteryLevel, maxBatteryLevel;
     int wirelessStrength = IS_GetWirelessSignalStatus(eState);
     if(wirelessStrength != NO_SIG){
@@ -107,7 +114,7 @@ float ofxIedk::getBatteryStatus(){
 }
 
 /*protected*///--------------------------------------------------------------
-void ofxIedk::checkStatus(){
+void iedkToolkit::checkStatus(){
     if(bConnected){
         state = IEE_EngineGetNextEvent(eEvent);
         
@@ -180,103 +187,116 @@ void ofxIedk::checkStatus(){
 }
 
 //--------------------------------------------------------------
-void ofxIedk::updateEmotion(){
+void iedkToolkit::updateEmotion(){
     
-    excitement = getEmotion(PM_EXCITEMENT);
-    relaxation = getEmotion(PM_RELAXATION);
-    stress = getEmotion(PM_STRESS);
-    engagement = getEmotion(PM_ENGAGEMENT);
-    interest = getEmotion(PM_INTEREST);
-    focus = getEmotion(PM_FOCUS);
-    
-    if(excitement != -1 && relaxation != -1 && stress != -1 && engagement != -1 && interest != -1 && focus != -1){
-        bUpdateEmotion = true;
-    }else{
-        bUpdateEmotion = false;
-    }
+    excitement = IS_PerformanceMetricGetInstantaneousExcitementScore(eState);
+    relaxation = IS_PerformanceMetricGetRelaxationScore(eState);
+    stress = IS_PerformanceMetricGetStressScore(eState);
+    engagement = IS_PerformanceMetricGetEngagementBoredomScore(eState);
+    interest = IS_PerformanceMetricGetInterestScore(eState);
+    focus = IS_PerformanceMetricGetFocusScore(eState);
 
 }
 
 //--------------------------------------------------------------
-void ofxIedk::checkIEEQuality(){
+void iedkToolkit::checkIEEQuality(){
+    
+    vector<IEE_DataChannel_t> list;
+    if(deviceType == EMOTIV_INSIGHT){ list = insightChannelList; }
+    else if(deviceType == EMOTIV_EPOCPLUS){ list = epocplusChannelList; }
+    
     int wirelessStrength = IS_GetWirelessSignalStatus(eState);
     if(wirelessStrength != NO_SIG){
-        
+        for(int i = 0; i < channels.size(); i++){
+            IEE_InputChannels_t input;
+            switch(list[i]){
+                case IED_AF3:
+                    input = IEE_CHAN_AF3;
+                    break;
+                case IED_AF4:
+                    input = IEE_CHAN_AF4;
+                    break;
+                case IED_T7:
+                    input = IEE_CHAN_T7;
+                    break;
+                case IED_T8:
+                    input = IEE_CHAN_T8;
+                    break;
+                case IED_Pz:
+                    input = IEE_CHAN_Pz;
+                    break;
+            }
+            IEEQuality[i] = getQuality(input);
+        }
     }
+    
+    /*
+     need add for epoc+
+     F7, F3, FC5, , P7, O1, O2, P8, , FC6, F4, F8, 
+     typedef enum IEE_InputChannels_enum {
+     
+     IEE_CHAN_CMS = 0,
+     IEE_CHAN_DRL,
+     IEE_CHAN_FP1,
+     IEE_CHAN_AF3,
+     IEE_CHAN_F7,
+     IEE_CHAN_F3,
+     IEE_CHAN_FC5,
+     IEE_CHAN_T7,
+     IEE_CHAN_P7,
+     IEE_CHAN_Pz,
+     IEE_CHAN_O1 = IEE_CHAN_Pz,
+     IEE_CHAN_O2,
+     IEE_CHAN_P8,
+     IEE_CHAN_T8,
+     IEE_CHAN_FC6,
+     IEE_CHAN_F4,
+     IEE_CHAN_F8,
+     IEE_CHAN_AF4,
+     IEE_CHAN_FP2,
+     } IEE_InputChannels_t;
+     */
     
 }
 
 //--------------------------------------------------------------
-void ofxIedk::getAverageBandPower(){
-    for(int i = 0; i < channelSize; i++){
+void iedkToolkit::getAverageBandPower(){
+    
+    vector<IEE_DataChannel_t> list;
+    if(deviceType == EMOTIV_INSIGHT){ list = insightChannelList; }
+    else if(deviceType == EMOTIV_EPOCPLUS){ list = epocplusChannelList; }
+    
+    for(int i = 0; i < channels.size(); i++){
         int result = IEE_GetAverageBandPowers(
                                               userID
-                                              ,channelList[i]
-                                              ,&theta
-                                              ,&alpha
-                                              ,&low_beta
-                                              ,&high_beta
-                                              ,&gamma
+                                              ,list[i]
+                                              ,&channels[i].theta
+                                              ,&channels[i].alpha
+                                              ,&channels[i].low_beta
+                                              ,&channels[i].high_beta
+                                              ,&channels[i].gamma
                                               );
     }
 }
 
-
 //--------------------------------------------------------------
-void ofxIedk::update(ofEventArgs &event){
+void iedkToolkit::update(ofEventArgs &event){
     checkStatus();
-    if(!bConnected) {
-        deviceSize = IEE_GetInsightDeviceCount() + IEE_GetEpocPlusDeviceCount();
-    }
+    checkIEEQuality();
+    if(!bConnected) { deviceSize = IEE_GetInsightDeviceCount() + IEE_GetEpocPlusDeviceCount(); }
     if(!isReady){ return; }
+    
     if(useEmotionEvent) { updateEmotion(); }
     if(useMotionEvent) {}
     if(useMentalEvent) {}
     if(useFacialEvent) {}
-
+    
     getAverageBandPower();
 }
 
 //--------------------------------------------------------------
-float ofxIedk::getEmotion(IEE_PerformanceMetricAlgo_enum type){
-    
-    //return 0. - 1.
-    if(IS_PerformanceMetricIsActive(eState, type)){
-        switch (type) {
-            case PM_EXCITEMENT:
-                return IS_PerformanceMetricGetInstantaneousExcitementScore(eState);//short term
-                //long term excitement
-                //IS_PerformanceMetricGetExcitementLongTermScore(eState);
-                break;
-                
-            case PM_RELAXATION:
-                return IS_PerformanceMetricGetRelaxationScore(eState);
-                break;
-                
-            case PM_STRESS:
-                return IS_PerformanceMetricGetStressScore(eState);
-                break;
-                
-            case PM_ENGAGEMENT:
-                return IS_PerformanceMetricGetEngagementBoredomScore(eState);
-                break;
-                
-            case PM_INTEREST:
-                return IS_PerformanceMetricGetInterestScore(eState);
-                break;
-                
-            case PM_FOCUS:
-                return IS_PerformanceMetricGetFocusScore(eState);
-                break;
-            
-        }
-    }
-    return -1;
-}
-
-//--------------------------------------------------------------
-IEE_EEG_ContactQuality_t ofxIedk::getQuality(IEE_InputChannels_t ch){
-    return IS_GetContactQuality(eState, ch);
+int iedkToolkit::getQuality(IEE_InputChannels_t ch){
+    return (int)IS_GetContactQuality(eState, ch);
 }
 //--------------------------------------------------------------
 
